@@ -1,20 +1,36 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from typing import Optional
 import uuid
+import os
 
 import models
-import os
 import schemas
 from database import SessionLocal, engine
 
+# Create tables
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+# -----------------------------
+# ✅ CORS FIX (IMPORTANT)
+# -----------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "https://coursesphere-backend.onrender.com",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -----------------------------
 # DATABASE
@@ -29,7 +45,6 @@ def get_db():
 # -----------------------------
 # SECURITY
 # -----------------------------
-
 SECRET_KEY = os.getenv("SECRET_KEY", "dev_secret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
@@ -37,7 +52,6 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
-# Temporary in-memory password reset storage
 password_reset_tokens = {}
 
 def create_access_token(data: dict):
@@ -253,7 +267,7 @@ def delete_course(
     return {"message": "Course deleted successfully"}
 
 # -----------------------------
-# GET COURSES (Search + Pagination)
+# GET COURSES
 # -----------------------------
 @app.get("/courses", response_model=list[schemas.CourseResponse])
 def get_courses(
@@ -266,29 +280,6 @@ def get_courses(
     return db.query(models.Course).filter(
         models.Course.title.contains(search)
     ).offset(skip).limit(limit).all()
-
-# -----------------------------
-# CHANGE USER ROLE
-# -----------------------------
-@app.put("/users/{user_id}/role")
-def change_user_role(
-    user_id: int,
-    role: str,
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(require_admin)
-):
-
-    user = db.query(models.User).filter(
-        models.User.id == user_id
-    ).first()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.role = role
-    db.commit()
-
-    return {"message": f"User role changed to {role}"}
 
 # -----------------------------
 # ENROLL
@@ -326,27 +317,34 @@ def enroll(
     return {"message": "Enrolled successfully"}
 
 # -----------------------------
-# CANCEL ENROLLMENT
+# MY COURSES
 # -----------------------------
-@app.delete("/enroll/{course_id}")
-def cancel_enroll(
-    course_id: int,
+@app.get("/my-courses")
+def my_courses(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user)
 ):
 
-    enrollment = db.query(models.Enrollment).filter(
-        models.Enrollment.user_id == user.id,
-        models.Enrollment.course_id == course_id
-    ).first()
+    enrollments = db.query(models.Enrollment).filter(
+        models.Enrollment.user_id == user.id
+    ).all()
 
-    if not enrollment:
-        raise HTTPException(status_code=404, detail="Not enrolled")
+    result = []
 
-    db.delete(enrollment)
-    db.commit()
+    for e in enrollments:
+        course = db.query(models.Course).filter(
+            models.Course.id == e.course_id
+        ).first()
 
-    return {"message": "Enrollment cancelled successfully"}
+        result.append({
+            "id": course.id,
+            "title": course.title,
+            "description": course.description,
+            "level": course.level,
+            "duration": course.duration
+        })
+
+    return result
 
 # -----------------------------
 # ADMIN STATS
