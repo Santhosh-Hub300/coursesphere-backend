@@ -90,7 +90,7 @@ def root():
     return {"message": "CourseSphere Backend Running - PRO VERSION"}
 
 # -----------------------------
-# REGISTER
+# REGISTER (Admin Email Enabled)
 # -----------------------------
 @app.post("/register")
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
@@ -104,11 +104,16 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
     hashed = pwd_context.hash(user.password)
 
+    # 🔥 AUTO ADMIN EMAIL LOGIC
+    role = "Student"
+    if user.email == "admin@coursesphere.com":
+        role = "Admin"
+
     new_user = models.User(
         name=user.name,
         email=user.email,
         password=hashed,
-        role="Student"
+        role=role
     )
 
     db.add(new_user)
@@ -150,7 +155,6 @@ def get_courses(
     limit: int = 5,
     db: Session = Depends(get_db)
 ):
-
     return db.query(models.Course).filter(
         models.Course.title.contains(search)
     ).offset(skip).limit(limit).all()
@@ -234,4 +238,3 @@ def admin_stats(
         "total_courses": db.query(models.Course).count(),
         "total_enrollments": db.query(models.Enrollment).count()
     }
-
