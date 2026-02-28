@@ -6,7 +6,6 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from typing import Optional
-import uuid
 import os
 
 import models
@@ -19,15 +18,15 @@ models.Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 # -----------------------------
-# ✅ PRODUCTION CORS CONFIG
+# ✅ FINAL UNIVERSAL CORS CONFIG
 # -----------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
         "https://coursesphere-frontend.vercel.app",
-        "https://coursesphere-frontend-295ogz37t-santhosh-hub300s-projects.vercel.app",
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,8 +51,6 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-
-password_reset_tokens = {}
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -237,3 +234,4 @@ def admin_stats(
         "total_courses": db.query(models.Course).count(),
         "total_enrollments": db.query(models.Enrollment).count()
     }
+
