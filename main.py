@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -19,13 +19,14 @@ models.Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 # -----------------------------
-# ✅ CORS FIX (IMPORTANT)
+# ✅ PRODUCTION CORS CONFIG
 # -----------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "https://coursesphere-backend.onrender.com",
+        "https://coursesphere-frontend.vercel.app",
+        "https://coursesphere-frontend-295ogz37t-santhosh-hub300s-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -141,130 +142,6 @@ def login(
     access_token = create_access_token(data={"sub": db_user.email})
 
     return {"access_token": access_token, "token_type": "bearer"}
-
-# -----------------------------
-# PASSWORD RESET REQUEST
-# -----------------------------
-@app.post("/reset-password-request")
-def reset_password_request(email: str, db: Session = Depends(get_db)):
-
-    user = db.query(models.User).filter(
-        models.User.email == email
-    ).first()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="Email not found")
-
-    token = str(uuid.uuid4())
-    password_reset_tokens[token] = {
-        "email": email,
-        "expires": datetime.utcnow() + timedelta(minutes=15)
-    }
-
-    return {
-        "message": "Password reset token generated",
-        "reset_token": token
-    }
-
-# -----------------------------
-# PASSWORD RESET CONFIRM
-# -----------------------------
-@app.post("/reset-password-confirm")
-def reset_password_confirm(token: str, new_password: str, db: Session = Depends(get_db)):
-
-    if token not in password_reset_tokens:
-        raise HTTPException(status_code=400, detail="Invalid token")
-
-    token_data = password_reset_tokens[token]
-
-    if datetime.utcnow() > token_data["expires"]:
-        del password_reset_tokens[token]
-        raise HTTPException(status_code=400, detail="Token expired")
-
-    user = db.query(models.User).filter(
-        models.User.email == token_data["email"]
-    ).first()
-
-    user.password = pwd_context.hash(new_password)
-    db.commit()
-
-    del password_reset_tokens[token]
-
-    return {"message": "Password reset successfully"}
-
-# -----------------------------
-# ME
-# -----------------------------
-@app.get("/me")
-def me(user: models.User = Depends(get_current_user)):
-    return {
-        "name": user.name,
-        "email": user.email,
-        "role": user.role
-    }
-
-# -----------------------------
-# CREATE COURSE
-# -----------------------------
-@app.post("/courses")
-def create_course(
-    course: schemas.CourseCreate,
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(require_admin)
-):
-
-    new_course = models.Course(**course.dict())
-    db.add(new_course)
-    db.commit()
-
-    return {"message": "Course created successfully"}
-
-# -----------------------------
-# UPDATE COURSE
-# -----------------------------
-@app.put("/courses/{course_id}")
-def update_course(
-    course_id: int,
-    course: schemas.CourseCreate,
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(require_admin)
-):
-
-    existing = db.query(models.Course).filter(
-        models.Course.id == course_id
-    ).first()
-
-    if not existing:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    for key, value in course.dict().items():
-        setattr(existing, key, value)
-
-    db.commit()
-
-    return {"message": "Course updated successfully"}
-
-# -----------------------------
-# DELETE COURSE
-# -----------------------------
-@app.delete("/courses/{course_id}")
-def delete_course(
-    course_id: int,
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(require_admin)
-):
-
-    course = db.query(models.Course).filter(
-        models.Course.id == course_id
-    ).first()
-
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    db.delete(course)
-    db.commit()
-
-    return {"message": "Course deleted successfully"}
 
 # -----------------------------
 # GET COURSES
