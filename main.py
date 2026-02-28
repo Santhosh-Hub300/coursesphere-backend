@@ -232,3 +232,40 @@ def admin_stats(db: Session = Depends(get_db),
         "total_courses": db.query(models.Course).count(),
         "total_enrollments": db.query(models.Enrollment).count()
     }
+# =============================
+# ADMIN - GET ALL STUDENTS + ENROLLMENTS
+# =============================
+@app.get("/admin/students")
+def get_all_students(
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(require_admin)
+):
+    students = db.query(models.User).filter(
+        models.User.role == "Student"
+    ).all()
+
+    result = []
+
+    for student in students:
+        enrollments = db.query(models.Enrollment).filter(
+            models.Enrollment.user_id == student.id
+        ).all()
+
+        courses = []
+
+        for e in enrollments:
+            course = db.query(models.Course).filter(
+                models.Course.id == e.course_id
+            ).first()
+
+            if course:
+                courses.append(course.title)
+
+        result.append({
+            "id": student.id,
+            "name": student.name,
+            "email": student.email,
+            "courses": courses
+        })
+
+    return result
