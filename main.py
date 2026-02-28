@@ -106,7 +106,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
     # 🔥 AUTO ADMIN EMAIL LOGIC
     role = "Student"
-    if user.email == "admin@coursesphere.com":
+    if user.email in ["admin@coursesphere.com", "superadmin@coursesphere.com"]:
         role = "Admin"
 
     new_user = models.User(
