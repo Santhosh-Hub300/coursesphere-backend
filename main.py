@@ -160,6 +160,29 @@ def get_courses(search: Optional[str] = "",
     ).offset(skip).limit(limit).all()
 
 # =============================
+# CREATE COURSE (ADMIN ONLY)
+# =============================
+@app.post("/courses")
+def create_course(
+    course: schemas.CourseCreate,
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(require_admin)
+):
+
+    new_course = models.Course(
+        title=course.title,
+        description=course.description,
+        level=course.level,
+        duration=course.duration
+    )
+
+    db.add(new_course)
+    db.commit()
+    db.refresh(new_course)
+
+    return {"message": "Course created successfully"}
+
+# =============================
 # ENROLL
 # =============================
 @app.post("/enroll/{course_id}")
