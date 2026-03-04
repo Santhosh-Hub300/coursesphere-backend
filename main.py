@@ -1,3 +1,7 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,29 +10,31 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from typing import Optional
-import os
 
 import models
 import schemas
 from database import SessionLocal, engine
 
+# =============================
+# CREATE TABLES
+# =============================
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
 # =============================
-# ✅ UNIVERSAL CORS (PRODUCTION SAFE)
+# CORS (Production Safe)
 # =============================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # 🔥 allow all origins (simple + safe for your project)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # =============================
-# DATABASE
+# DATABASE DEPENDENCY
 # =============================
 def get_db():
     db = SessionLocal()
@@ -38,23 +44,34 @@ def get_db():
         db.close()
 
 # =============================
-# SECURITY
+# SECURITY CONFIG (ENV BASED)
 # =============================
-SECRET_KEY = os.getenv("SECRET_KEY", "dev_secret")
+SECRET_KEY = os.getenv("SECRET_KEY")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY is not set in environment variables")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
+# =============================
+# TOKEN CREATION
+# =============================
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(token: str = Depends(oauth2_scheme),
-                     db: Session = Depends(get_db)):
+# =============================
+# AUTH HELPERS
+# =============================
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
@@ -80,7 +97,7 @@ def require_admin(user: models.User = Depends(get_current_user)):
 # =============================
 @app.get("/")
 def root():
-    return {"message": "CourseSphere Backend Running"}
+    return {"message": "CourseSphere Backend Running 🚀"}
 
 # =============================
 # REGISTER
@@ -97,7 +114,6 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
     hashed = pwd_context.hash(user.password)
 
-    # 🔥 AUTO ADMIN DOMAIN LOGIC
     role = "Student"
     if user.email.endswith("@coursesphere.com"):
         role = "Admin"
@@ -119,8 +135,10 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
 # LOGIN
 # =============================
 @app.post("/login", response_model=schemas.Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(),
-          db: Session = Depends(get_db)):
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
 
     db_user = db.query(models.User).filter(
         models.User.email == form_data.username
@@ -151,10 +169,12 @@ def me(user: models.User = Depends(get_current_user)):
 # GET COURSES
 # =============================
 @app.get("/courses", response_model=list[schemas.CourseResponse])
-def get_courses(search: Optional[str] = "",
-                skip: int = 0,
-                limit: int = 20,
-                db: Session = Depends(get_db)):
+def get_courses(
+    search: Optional[str] = "",
+    skip: int = 0,
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
     return db.query(models.Course).filter(
         models.Course.title.contains(search)
     ).offset(skip).limit(limit).all()
@@ -186,9 +206,11 @@ def create_course(
 # ENROLL
 # =============================
 @app.post("/enroll/{course_id}")
-def enroll(course_id: int,
-           db: Session = Depends(get_db),
-           user: models.User = Depends(get_current_user)):
+def enroll(
+    course_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user)
+):
 
     course = db.query(models.Course).filter(
         models.Course.id == course_id
@@ -219,8 +241,10 @@ def enroll(course_id: int,
 # MY COURSES
 # =============================
 @app.get("/my-courses")
-def my_courses(db: Session = Depends(get_db),
-               user: models.User = Depends(get_current_user)):
+def my_courses(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user)
+):
 
     enrollments = db.query(models.Enrollment).filter(
         models.Enrollment.user_id == user.id
@@ -233,13 +257,14 @@ def my_courses(db: Session = Depends(get_db),
             models.Course.id == e.course_id
         ).first()
 
-        result.append({
-            "id": course.id,
-            "title": course.title,
-            "description": course.description,
-            "level": course.level,
-            "duration": course.duration
-        })
+        if course:
+            result.append({
+                "id": course.id,
+                "title": course.title,
+                "description": course.description,
+                "level": course.level,
+                "duration": course.duration
+            })
 
     return result
 
@@ -247,22 +272,25 @@ def my_courses(db: Session = Depends(get_db),
 # ADMIN STATS
 # =============================
 @app.get("/admin/stats")
-def admin_stats(db: Session = Depends(get_db),
-                admin: models.User = Depends(require_admin)):
-
+def admin_stats(
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(require_admin)
+):
     return {
         "total_users": db.query(models.User).count(),
         "total_courses": db.query(models.Course).count(),
         "total_enrollments": db.query(models.Enrollment).count()
     }
+
 # =============================
-# ADMIN - GET ALL STUDENTS + ENROLLMENTS
+# ADMIN - ALL STUDENTS
 # =============================
 @app.get("/admin/students")
 def get_all_students(
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_admin)
 ):
+
     students = db.query(models.User).filter(
         models.User.role == "Student"
     ).all()
