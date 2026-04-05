@@ -1,24 +1,18 @@
-import os
-from dotenv import load_dotenv
-load_dotenv()
-
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import FastAPI, Depends, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from jose import JWTError, jwt
-from datetime import datetime, timedelta
-from passlib.context import CryptContext
-from typing import Optional
-
-import models
-import schemas
 from database import SessionLocal, engine
+import models
+from passlib.context import CryptContext
+from jose import jwt
 
+# ================= INIT =================
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+# ================= CORS =================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,6 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ================= DB =================
 def get_db():
     db = SessionLocal()
     try:
@@ -34,26 +29,41 @@ def get_db():
     finally:
         db.close()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
+# ================= SECURITY =================
+SECRET_KEY = "secret"
 ALGORITHM = "HS256"
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
+# ================= CREATE ADMIN (🔥 FIXED) =================
+def create_admin():
+    db = SessionLocal()
 
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    # 🔥 ALWAYS RESET ADMIN (FIX LOGIN ISSUE)
+    db.query(models.User).filter(
+        models.User.email == "admin@coursesphere.com"
+    ).delete()
 
+    db.add(models.User(
+        name="Admin",
+        email="admin@coursesphere.com",
+        password=pwd_context.hash("admin123"),
+        role="Admin"
+    ))
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    db.commit()
+    db.close()
+
+create_admin()
+
+# ================= TOKEN =================
+def create_token(email: str):
+    return jwt.encode({"sub": email}, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("sub")
-    except JWTError:
+        email = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM]).get("sub")
+    except:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     user = db.query(models.User).filter(models.User.email == email).first()
@@ -63,239 +73,121 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
     return user
 
-
-def require_admin(user: models.User = Depends(get_current_user)):
+def admin_only(user = Depends(get_user)):
     if user.role != "Admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+        raise HTTPException(status_code=403, detail="Admin only")
     return user
 
-
-@app.get("/")
-def root():
-    return {"message": "CourseSphere Backend Running 🚀"}
-
-
+# ================= REGISTER =================
 @app.post("/register")
-def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+def register(
+    name: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    if db.query(models.User).filter(models.User.email == email).first():
+        raise HTTPException(status_code=400, detail="Email already exists")
 
-    existing = db.query(models.User).filter(models.User.email == user.email).first()
-
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    hashed = pwd_context.hash(user.password)
-
-    role = "Student"
-    if user.email.endswith("@coursesphere.com"):
-        role = "Admin"
-
-    new_user = models.User(
-        name=user.name,
-        email=user.email,
-        password=hashed,
-        role=role
-    )
-
-    db.add(new_user)
+    db.add(models.User(
+        name=name,
+        email=email,
+        password=pwd_context.hash(password),
+        role="Student"
+    ))
     db.commit()
-    db.refresh(new_user)
 
     return {"message": "User registered successfully"}
 
+# ================= LOGIN =================
+@app.post("/login")
+def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(
+        models.User.email == form.username
+    ).first()
 
-@app.post("/login", response_model=schemas.Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    if not user or not pwd_context.verify(form.password, user.password):
+        raise HTTPException(status_code=400, detail="Invalid credentials")
 
-    db_user = db.query(models.User).filter(models.User.email == form_data.username).first()
+    return {
+        "access_token": create_token(user.email),
+        "token_type": "bearer"
+    }
 
-    if not db_user:
-        raise HTTPException(status_code=400, detail="Invalid email or password")
-
-    if not pwd_context.verify(form_data.password, db_user.password):
-        raise HTTPException(status_code=400, detail="Invalid email or password")
-
-    access_token = create_access_token(data={"sub": db_user.email})
-
-    return {"access_token": access_token, "token_type": "bearer"}
-
-
+# ================= ME (🔥 IMPORTANT) =================
 @app.get("/me")
-def me(user: models.User = Depends(get_current_user)):
-    return {"name": user.name, "email": user.email, "role": user.role}
+def get_me(user = Depends(get_user)):
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role
+    }
 
+# ================= COURSES =================
+@app.get("/courses")
+def get_courses(db: Session = Depends(get_db)):
+    courses = db.query(models.Course).all()
 
-@app.get("/courses", response_model=list[schemas.CourseResponse])
-def get_courses(search: Optional[str] = "", skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
-    return db.query(models.Course).filter(
-        models.Course.title.contains(search)
-    ).offset(skip).limit(limit).all()
-
+    return [
+        {
+            "id": c.id,
+            "title": c.title,
+            "description": c.description,
+            "level": c.level,
+            "duration": c.duration
+        }
+        for c in courses
+    ]
 
 @app.post("/courses")
-def create_course(course: schemas.CourseCreate, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-
-    new_course = models.Course(
-        title=course.title,
-        description=course.description,
-        level=course.level,
-        duration=course.duration
-    )
-
-    db.add(new_course)
-    db.commit()
-    db.refresh(new_course)
-
-    return {"message": "Course created successfully"}
-
-
-@app.delete("/courses/{course_id}")
-def delete_course(course_id: int, db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-
-    course = db.query(models.Course).filter(models.Course.id == course_id).first()
-
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    db.delete(course)
+def add_course(
+    title: str = Form(...),
+    description: str = Form(...),
+    level: str = Form(...),
+    duration: str = Form(...),
+    db: Session = Depends(get_db),
+    user = Depends(admin_only)
+):
+    db.add(models.Course(
+        title=title,
+        description=description,
+        level=level,
+        duration=duration
+    ))
     db.commit()
 
-    return {"message": "Course deleted successfully"}
+    return {"message": "Course added"}
 
-
-@app.post("/enroll/{course_id}")
-def enroll(course_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-
-    course = db.query(models.Course).filter(models.Course.id == course_id).first()
-
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    existing = db.query(models.Enrollment).filter(
-        models.Enrollment.user_id == user.id,
-        models.Enrollment.course_id == course_id
-    ).first()
-
-    if existing:
-        raise HTTPException(status_code=400, detail="Already enrolled")
-
-    enrollment = models.Enrollment(user_id=user.id, course_id=course_id)
-
-    db.add(enrollment)
+# ================= ENROLL =================
+@app.post("/enroll/{id}")
+def enroll(id: int, db: Session = Depends(get_db), user = Depends(get_user)):
+    db.add(models.Enrollment(user_id=user.id, course_id=id))
     db.commit()
-
-    return {"message": "Enrolled successfully"}
-
-
-@app.delete("/unenroll/{course_id}")
-def unenroll(course_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-
-    enrollment = db.query(models.Enrollment).filter(
-        models.Enrollment.user_id == user.id,
-        models.Enrollment.course_id == course_id
-    ).first()
-
-    if not enrollment:
-        raise HTTPException(status_code=404, detail="Enrollment not found")
-
-    db.delete(enrollment)
-    db.commit()
-
-    return {"message": "Unenrolled successfully"}
-
+    return {"message": "Enrolled"}
 
 @app.get("/my-courses")
-def my_courses(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-
-    enrollments = db.query(models.Enrollment).filter(models.Enrollment.user_id == user.id).all()
+def my_courses(db: Session = Depends(get_db), user = Depends(get_user)):
+    enrolls = db.query(models.Enrollment).filter(
+        models.Enrollment.user_id == user.id
+    ).all()
 
     result = []
 
-    for e in enrollments:
-        course = db.query(models.Course).filter(models.Course.id == e.course_id).first()
-
-        if course:
+    for e in enrolls:
+        c = db.query(models.Course).filter(models.Course.id == e.course_id).first()
+        if c:
             result.append({
-                "id": course.id,
-                "title": course.title,
-                "description": course.description,
-                "level": course.level,
-                "duration": course.duration
+                "id": c.id,
+                "title": c.title,
+                "duration": c.duration
             })
 
     return result
-
-
-@app.get("/admin/stats")
-def admin_stats(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-
-    return {
-        "total_users": db.query(models.User).count(),
-        "total_courses": db.query(models.Course).count(),
-        "total_enrollments": db.query(models.Enrollment).count()
-    }
-
-
-@app.get("/admin/students")
-def get_all_students(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
-
-    students = db.query(models.User).filter(models.User.role == "Student").all()
-
-    result = []
-
-    for student in students:
-        enrollments = db.query(models.Enrollment).filter(models.Enrollment.user_id == student.id).all()
-
-        courses = []
-
-        for e in enrollments:
-            course = db.query(models.Course).filter(models.Course.id == e.course_id).first()
-
-            if course:
-                courses.append(course.title)
-
-        result.append({
-            "id": student.id,
-            "name": student.name,
-            "email": student.email,
-            "courses": courses
-        })
-
-    return result
-# =============================
-# UNENROLL COURSE
-# =============================
-@app.delete("/unenroll/{course_id}")
-def unenroll(
-    course_id: int,
-    db: Session = Depends(get_db),
-    user: models.User = Depends(get_current_user)
-):
-
-    enrollment = db.query(models.Enrollment).filter(
-        models.Enrollment.user_id == user.id,
-        models.Enrollment.course_id == course_id
-    ).first()
-
-    if not enrollment:
-        raise HTTPException(status_code=404, detail="Enrollment not found")
-
-    db.delete(enrollment)
-    db.commit()
-
-    return {"message": "Unenrolled successfully"}
-# =============================
-# DELETE COURSE (ADMIN ONLY)
-# =============================
-@app.delete("/courses/{course_id}")
-def delete_course(
-    course_id: int,
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(require_admin)
-):
-
-    course = db.query(models.Course).filter(
-        models.Course.id == course_id
-    ).first()
+# ================= DELETE COURSE (🔥 ADD THIS) =================
+@app.delete("/courses/{id}")
+def delete_course(id: int, db: Session = Depends(get_db), user=Depends(admin_only)):
+    course = db.query(models.Course).filter(models.Course.id == id).first()
 
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -304,3 +196,17 @@ def delete_course(
     db.commit()
 
     return {"message": "Course deleted successfully"}
+@app.delete("/unenroll/{id}")
+def unenroll(id: int, db: Session = Depends(get_db), user=Depends(get_user)):
+    e = db.query(models.Enrollment).filter(
+        models.Enrollment.user_id == user.id,
+        models.Enrollment.course_id == id
+    ).first()
+
+    if not e:
+        raise HTTPException(status_code=404, detail="Not enrolled")
+
+    db.delete(e)
+    db.commit()
+
+    return {"message": "Unenrolled successfully"}
